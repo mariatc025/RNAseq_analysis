@@ -1,0 +1,1524 @@
+---
+title: "IEO Project: HPRT1 in Breast Cancer"
+author:
+- name: "Jingqi Fu, Xareni Reyes Soto and Maria Tarrat Castells"
+  affiliation: Universitat Pompeu Fabra
+  email: jingqi.fu01@estudiant.upf.edu, xareni.reyessoto01@estudiant.upf.edu, maria.tarrat01@estudiant.upf.edu
+        
+          
+date: "`r Sys.Date()`"
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    fig_captions: yes
+bibliography: bibliography.bib
+vignette: >
+  %\VignetteIndexEntry{IEOprojectAnalysis}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+<!--
+In this first chunk of code, which will not be shown in the resulting
+document (echo=FALSE) sets up global processing options, such as whether
+a comment character should appear before code results (set to the null
+character string in this case), collapse source and output blocks into
+a single code block (collapse=TRUE), align figures to the center
+(fig.align="center") or cache the results to speed up vignette building
+(cache=FALSE thus disabled in this case). A full description of possible
+options can be found at http://yihui.name/knitr/options
+--->
+
+```{r setup, echo=FALSE, cache=FALSE}
+library(knitr) ## kable()
+library(kableExtra) ## kable_styling(), save_kable()
+library(here) ## here()
+library(usethis) ## use_directory()
+
+knitr::opts_chunk$set(
+  collapse=TRUE,
+  comment="",
+  fig.align="center",
+  fig.wide=TRUE,
+  cache=FALSE
+)
+
+## this option avoid use_directory() being verbose
+options(usethis.quiet=TRUE)
+
+## create these paths at build time if they do not exist
+use_directory(file.path("doc"))
+use_directory(file.path("inst", "doc"))
+
+## fetch the package root directory
+path2pkg <- here()
+```
+
+# Introduction
+Breast cancer is one of the most common malignancies worldwide, accounts for approximately 25% of all cancer diagnoses in women and results in over 600,000 deaths annually. Hypoxanthine phosphoribosyl transferase 1 (HPRT1) is an enzyme traditionally categorized as a housekeeping gene involved in the purine salvage pathway. While HPRT1 has been conventionally used as an endogenous control in gene expression studies, recent evidence suggests its potential role in cancer biology. Multiple studies have demonstrated elevated HPRT1 expression in various cancer types compared to normal tissues, with breast cancer exhibiting the highest average HPRT1 expression (@j2020hypoxanthine). Of particular interest is the observation that HPRT1 expression is highest in the basal subtype of breast cancer, which represents the most aggressive form of the disease.
+
+The hypothesis driving this investigation is that HPRT1 may serve as both a diagnostic biomarker and a regulator of critical pathways in breast cancer progression. By providing nucleotides for rapidly dividing cancer cells, upregulated HPRT1 could potentially support tumor growth and contribute to the aggressive phenotype observed in certain breast cancer subtypes.
+
+In this study, we analyze RNA sequencing data from three distinct breast cell lines: MCF-10A (non-tumorigenic), MCF-7 (estrogen receptor positive), and MDA-MB-231 (triple-negative). 
+Each cell line was subjected to four treatment conditions: untreated, siControl, and two different HPRT1 knockdown conditions (siHPRT1-1 and siHPRT1-2), with two biological replicates per condition. The raw RNA-seq data for this analysis is available in the Gene Expression Omnibus (GEO) under accession GSE149768.
+
+Our analysis aims to:
+
+1) Characterize HPRT1 expression across different breast cancer subtypes  
+2) Identify genes and pathways regulated by HPRT1 through differential expression analysis following HPRT1 knockdown  
+3) Evaluate the potential of HPRT1 as a diagnostic and prognostic marker in breast cancer
+4) Understand the biological implications of HPRT1 upregulation in breast cancer progression
+
+
+```{r, echo = FALSE, eval=FALSE}
+devtools::build_vignettes()
+```
+
+
+```{r, echo = FALSE, eval = FALSE}
+devtools::document()
+```
+
+
+# Quality assessment
+
+## Data import and cleaning
+
+We start our analysis by loading the Summarized Experiment object from the rds file, which includes the raw table of counts.
+
+<!--
+The option 'message=FALSE' avoid dumping R messages such as "Loading required package: methods"
+into the output of the report.
+-->
+
+```{r, message=FALSE}
+library(SummarizedExperiment)
+
+#se <- readRDS(file.path(system.file("extdata",
+#                                   package="IEOproject"),
+#                         "GSE149768.rds"))
+library(here)
+here()
+path2pkg
+se <- readRDS(file.path(path2pkg, "inst", "extdata", "GSE149768.rds"))
+se
+```
+The SE object includes a raw table of counts (assays) with a total of `r nrow(se)` genes and `r ncol(se)` samples. 
+
+```{r}
+assays(se)$counts[1:5, 1:5]
+```
+
+The row names are Entrez Gene identifiers, while the column names are samples defined by the  Sequence Read Archive Run ([SRR](https://www.ncbi.nlm.nih.gov/books/NBK56913/#search.what_do_the_different_sra_accessi)) identifiers.
+
+The SE object also has row/feature annotation data, which contains the following information for each of the profiled genes:
+
+  - `Ensembl gene ID`
+  - `Gene biotype`
+  - `Description`
+  - `Ensembl gene ID version`
+  - `Gene symbol`
+
+```{r}
+head(rowData(se))
+```
+
+Additionally, the object contains genomic ranges data for each of the genes with the following columns:
+
+  - `seqnames`: the chromosome name
+  - `ranges`: the start and end of the genomic coordinates
+  - `strand`: positive or negative strand of the DNA
+
+```{r}
+rowRanges(se)
+```
+
+As for the the column/sample annotation data there are a total of 40 columns. 
+
+```{r}
+dim(colData(se))
+head(colData(se), n=3)
+```
+
+From this data we can infer that all these samples are of type SRA, from human cell lines, specifically the mammary epithelium and represent a variety of experimental conditions, moreover it provides a detailed description of multiple of the steps in the experimental design (treatment, growth and extract protocols), data processing protocols and the GEO Sample Accession Number (GSM) identifers, unique for each sample.
+
+First we can check for the presence of technical replicates, which are samples with the same GEO:
+
+```{r}
+length(unique(se$geo_accession))
+
+table(lengths(split(colnames(se), se$geo_accession)))
+```
+
+We can conclude that there are no technical replicates.
+
+```{r}
+metadata(se)
+```
+
+Now we explore the phenotypic variables we have. Unfortunately, the information from the metadata is not helpful to infer the important variables of the colData and what each title means. However, by observing colData we can infer the main groupings of the samples. The samples can be grouped by:
+
+Cell line (characteristics_ch1) and hormone status (characteristics_ch1.1):
+
+  - MCF-10A (8): non-tumorogenic cell-line or normal breast.
+  - MCF-7 (8): breast cancer cell-line, estrogen receptor positive.
+  - MDA-MB-231 (8): breast cancer cell-line, triple-negative (no estrogen or progesterone receptors, nor protein HER2).
+
+```{r}
+table(se$characteristics_ch1)
+table(se$characteristics_ch1.1)
+table(se$characteristics_ch1, se$characteristics_ch1.1)
+```
+
+Since each cell line has a specific hormone status, we will to focus solely on the cell line from now on.
+
+Treatment:
+
+  - Untreated (6)
+  - siControl (6)
+  - siHPRT1-1 (6)
+  - siHPRT1-2 (6)
+
+```{r}
+table(se$characteristics_ch1.3)
+```
+
+To facilitate working with these two variables, cell line and treatment, we are going to modify them.
+
+```{r}
+# Create new column in colData for cell_line, convert to factor and remove "cell line: "
+se$cell_line <- se$characteristics_ch1
+se$cell_line <- factor(se$cell_line)
+levels(se$cell_line) <- gsub("cell line: ", "", levels(se$cell_line))
+levels(se$cell_line)
+
+# Create new column in colData for treatment, convert to factor and remove "genotype/variation: "
+se$treatment <- se$characteristics_ch1.3
+se$treatment <- factor(se$treatment)
+levels(se$treatment) <- gsub("genotype/variation: ", "", levels(se$treatment))
+levels(se$treatment)
+
+```
+Here we can see a contingency table of the two main variables. For each cell line-treatment combination, there are 2 samples (biological replicates).
+
+```{r}
+table(se$cell_line, se$treatment)
+```
+
+Finally, we also observe that the variable `description` has unique identifiers for each sample with different sections "_" separated. The first part is the cell line, followed by the treatment and in the end there's the replica number.
+
+```{r}
+se$description
+```
+
+In Table \@ref(tab:pheno) each sample with a unique identifier is displayed along with the cell line, treatment and the description which indicates the replicate number. This helps us obtain an overview of our data and understand the underlying experimental design. 
+
+```{r pheno, echo=FALSE, message=FALSE}
+summary_df <- data.frame("Identifer"=colnames(se),
+                    "Cell line"=se$cell_line,
+                    Treatment=se$treatment,
+                    Replicate=se$description,
+                    check.names=FALSE)
+ktab <- kable(summary_df, caption="Phenotypic variables")
+kable_styling(ktab, position="center")
+```
+
+From this initial overview of the data we reach a similar conclusion than the authors of the article, which is that we have to compare the 4 different treatments within each cell line (3). For this reason we create an additional column of the cell line and treatment combination.
+
+```{r}
+se$cellxtreatment <- se$description
+se$cellxtreatment <- gsub("_(\\d+)$", "", se$cellxtreatment)
+se$cellxtreatment <- factor(se$cellxtreatment)
+levels(se$cellxtreatment)
+```
+
+To continue with the analysis we construct a `DGEList` object, incorporating the gene metadata, which includes the gene symbol and the sample metadata. 
+
+```{r, message=FALSE}
+library(edgeR)
+
+dge <- DGEList(counts=assays(se)$counts, genes=rowData(se), samples=colData(se))
+dim(dge)
+```
+The dimensions of the object are `r nrow(se)` genes and `r ncol(se)` samples, the same values as in the SE object.
+
+
+Then, we perform within-sample normalization by calculating $\log_2$ CPM units of expression and add them as an additional assay element to SummarizedExperiment to ease their manipulation.
+
+```{r}
+assays(se)$logCPM <- cpm(dge, log=TRUE)
+assays(se)$logCPM[1:5, 1:5]
+```
+
+
+
+## Sequencing depth
+
+To start the quality assessment we begin by comparing the sequencing depth 
+of the mapped reads between samples. For that we order them from lower to higher
+sequencing depth.
+
+```{r libsizes1, echo=FALSE, height=8, width=8, out.width="600px", fig.cap="Library sizes in increasing order colored by cell line."}
+par(mar=c(7, 5, 2, 2))
+# Order the samples by library size from smallest to largest
+order <- order(dge$sample$lib.size/1e6)
+# Convert each library size to millions of reads, following the order
+ordmreads <- dge$sample$lib.size[order]/1e6
+# Put the sample names as names of ordmreads vector
+names(ordmreads) <- colnames(se)[order]
+
+# Cell line colors
+cell_lines <- unique(se$cell_line)
+cell_line_colors <- c("MCF-10A" = "#1B9E77", 
+                      "MCF-7" = "#D95F02", 
+                      "MDA-MB-231" = "#7570B3")
+
+# Assign each color depending on the cell line of that sample
+colors_ordered <- cell_line_colors[as.character(se$cell_line[order])]
+
+# Barplot representation coloring by cell lines
+bp <- barplot(ordmreads, las=2, ylab="Millions of reads",
+              xlab="", col=colors_ordered, 
+              ylim=c(0, max(ordmreads)*1.2))
+
+untreatedmask <- se$treatment[order] == "Untreated"
+controlmask <- se$treatment[order] == "siControl"
+treatment1mask <- se$treatment[order] == "siHPRT1-1"
+treatment2mask <- se$treatment[order] == "siHPRT1-2"
+
+text(bp[untreatedmask, 1], dge$sample$lib.size[order][untreatedmask]/1e6, "U", pos=3)
+text(bp[controlmask, 1], dge$sample$lib.size[order][controlmask]/1e6, "C", pos=3)
+text(bp[treatment1mask, 1], dge$sample$lib.size[order][treatment1mask]/1e6, "1", pos=3)
+text(bp[treatment2mask, 1], dge$sample$lib.size[order][treatment2mask]/1e6, "2", pos=3)
+
+legend("topleft", names(cell_line_colors), inset=0.05,
+       pch=rep(16, length(cell_line_colors)),
+       col=unlist(cell_line_colors),
+       cex=0.8)
+```
+
+
+```{r libsizes2, echo=FALSE, height=9, width=8, out.width="600px", fig.cap="Library sizes in increasing order by treatment."}
+
+# Barplot representation coloring by treatment
+treatment <- unique(se$treatment)
+treatment_colors <- c("Untreated" = "#A6D854", 
+                      "siControl" = "#1F78B4", 
+                      "siHPRT1-1" = "#E3211C",
+                      "siHPRT1-2" = "#FFF2AE")
+
+# Assign each color depending on the treatment of that sample
+treatment_order <- treatment_colors[as.character(se$treatment[order])]
+
+# Barplot representation coloring by cell lines
+bp <- barplot(ordmreads, las=2, ylab="Millions of reads",
+              xlab="", col=treatment_order, 
+              ylim=c(0, max(ordmreads)*1.2))
+legend("topleft", names(treatment_colors), inset=0.05,
+       pch=rep(16, length(treatment_colors)),
+       col=unlist(treatment_colors),
+       cex=0.8)
+
+```
+
+In these plots we can see the sequencing depth per million reads of the samples in increasing order. The sequencing depth of the samples ranges from `r round(min(dge$sample$lib.size/1e6), digits=0)` to `r round(max(dge$sample$lib.size/1e6), digits=0)` million reads.
+
+In Figure \@ref(fig:libsizes1) the bars are colored by cell line and the type of treatment is named above each bar ( U = Untreated, C = siControl, 1 = siHPRT1-1, 2 = siHPRT1-2). From that plot we can conclude that sequencing depth is not confounded with the cell lines. However, we can also observe that the untreated samples were generally sequenced at a lower sequencing depth than the rest. This trend can be observed properly in Figure \@ref(fig:libsizes2) where the columns are colored by treatment. From these we can conclude that there is a possibility of the sample treatment groups being confounded with sequencing depth.
+
+## Distribution of expression levels among samples
+
+Figure \@ref(fig:distRawExp) shows the distribution of log2 CPM expression values per sample. The similar shapes of these curves suggest that the samples have comparable overall expression distributions.
+
+Figure \@ref(fig:boxplots) presents boxplots of log2 CPM values across all 24 samples. In our case, all boxplots look very similar across samples, which indicate good data quality. 
+
+```{r distRawExp, echo=FALSE, fig.height=5, fig.width=5, out.width="600px", fig.cap="Non-parametric density distribution of expression profiles per sample.", message=FALSE}
+library(geneplotter)
+par(mar=c(4, 5, 1, 1))
+lst <- as.list(as.data.frame(assays(se)$logCPM))
+multidensity(lst, xlab="log 2 CPM", legend=NULL,
+             main="", las=1)
+```
+```{r boxplots, echo=FALSE, fig.height=5, fig.width=5, out.width="600px", fig.cap="Boxplot representation of the expression levels across samples.", message=FALSE}
+par(mar = c(5, 6, 4, 2)) # Adjust the margin sizes
+boxplot(assays(se)$logCPM, col="lightblue", xlab="Samples",
+          ylab=expression(log[2] * "CPM"), cex.axis=1.2, cex.lab=1, xaxt = "n")
+```
+
+
+## Distribution of expression levels among genes
+
+We now identify lowly expressed genes, looking at the distribution of expression levels across genes, see Figure \@ref(fig:exprdist).
+
+```{r exprdist, echo=FALSE, out.width="600px", fig.cap="Distribution of average expression level per gene."}
+avgexp <- rowMeans(assays(se)$logCPM)
+hist(col="lightblue", avgexp, xlab=expression(log[2] * "CPM"), main="", las=1)
+```
+From this graph, we can see two peaks: one for genes with very low or almost zero expression across samples and another with detectable expression levels. This behavior is common in gene expression data.
+
+## Filtering of lowly-expressed genes
+
+Lowly-expressed genes can cause artifacts in further differential expression analysis.
+We will consider the combination of cell line and treatment as a group (see section 2.1 for details).
+Instead of doing it step by step manually, we use the function `filterByExpr()` coming from `edgeR`.
+
+```{r}
+mask <- filterByExpr(dge, group=se$cellxtreatment)
+se.filt <- se[mask, ]
+dim(se.filt)
+dge.filt <- dge[mask, ]
+dim(dge.filt)
+```
+We keep `r nrow(se.filt)` genes.
+```{r filteredgenes, fig.cap="Distribution of average expression level per gene with orange columns indicating distribution of genes that passed the filter."}
+par(mar=c(4, 5, 1, 1))
+h <- hist(col="lightblue", avgexp, xlab=expression("Expression level (" * log[2] * "CPM)"),
+            main="", las=1)
+x <- cut(rowMeans(assays(se.filt)$logCPM), breaks=h$breaks)
+lines(h$mids, table(x), type="h", lwd=10, lend=1, col="orange")
+  legend("topright", c("All genes", "Filtered genes"), fill=c("lightblue", "orange"))
+```
+Figure \@ref(fig:filteredgenes) shows in orange the distribution of genes that remain after the filtering.
+
+## Normalization
+
+As next step, we do normalization between samples using the TMM method using the function `calcNormFactors()`
+to ensure we can make comparisons across samples.
+
+```{r}
+dge.filt <- calcNormFactors(dge.filt)
+```
+
+Then compute log2 CPM and store the normalized values in a new assay in the  
+`SummarizedExperiment` object.
+
+```{r}
+assays(se.filt)$logCPM <- cpm(dge.filt, log=TRUE,
+                              normalized.lib.sizes=TRUE)
+```
+
+## MA-plots
+
+In order to detect samples with problems, we plot each sample against the average of the remaining samples. There are `r ncol(se.filt)` samples (and therefore plots) in total, shown in Figure \@ref(fig:maPlots). 
+
+```{r maPlots, fig.height=18, fig.width=10, dpi=100, echo=FALSE, fig.cap="MA-plots of filtered and normalized expression values."}
+par(mfrow=c(6, 4), mar=c(4, 5, 3, 1))
+for (i in 1:ncol(se.filt)) {
+  A <- rowMeans(assays(se.filt)$logCPM)
+  M <- assays(se.filt)$logCPM[, i] - A
+  smoothScatter(A, M, main=colnames(se.filt)[i], las=1)
+  abline(h=0, col="blue", lwd=2)
+  lo <- lowess(M ~ A)
+  lines(lo$x, lo$y, col="red", lwd=2)
+}
+```
+We observe from these plots that most points cluster around M = 0. In each plot, the red line summarizes the overall trend of the M values across the A values. This red line remains relatively flat around M = 0 for all samples, with no noticeable deviations or systematic trends. This suggests that no sample has a significant bias. Therefore, we can say that there are no major issues with the samples following normalization.
+
+## Experimental design and batch identification
+
+We start by checking some variables that could introduce some bias such as experimental design protocols (treatment, growth and extraction), library strategy and instrument model.
+
+```{r}
+possible_batch_cols <- c("treatment_protocol_ch1", "growth_protocol_ch1", 
+                  "extract_protocol_ch1", "extract_protocol_ch1.1", 
+                  "extract_protocol_ch1.2", "library_strategy", "instrument_model")
+
+# Iterate through the protocols and count how many are unique
+for(col in possible_batch_cols) {
+  n <- length(unique(se[[col]]))
+  if (n == 1){
+    cat(col, ": ", n, " unique protocol\n", sep="")
+  } else {
+    cat(col, ": ", n, " unique protocols\n", sep="")
+  }
+  cat(unique(se[[col]]), "\n\n" )
+}
+
+```
+
+From this data we can conclude that there are no differences between experimental design protocols, library strategies and instrument models. The only notable difference is the medium each cell line was grown in.
+
+Next, we use hierarchical clustering and multidimensional scaling to see how samples group together in Figure \@ref(fig:sampleClustering).
+
+```{r sampleClustering, fig.height=5, fig.width=8, dpi=100, echo=FALSE, fig.cap="Hierarchical clustering of the samples, labels correspond to sample description."}
+# Compute logCPM and distance matrix
+logCPM <- cpm(dge.filt, log=TRUE, prior.count=3)
+d <- as.dist(1-cor(logCPM, method="spearman"))
+
+# Perform hierarchical clustering
+sampleClustering <- hclust(d)
+sampleDendrogram <- as.dendrogram(sampleClustering, hang=0.1)
+
+# Define labels
+#cell_line_colors <- c("MCF-10A" = "#1B9E77", 
+#                      "MCF-7" = "#D95F02", 
+#                      "MDA-MB-231" = "#7570B3")
+
+
+batch <- cell_line_colors[as.character(se.filt$cell_line)]
+names(batch) <- colnames(se.filt)
+
+outcome <- se.filt$description
+names(outcome) <- colnames(se.filt)
+
+
+sampleDendrogram <- dendrapply(sampleDendrogram,
+  function(x, batch, labels) {
+    if (is.leaf(x)) {
+      attr(x, "nodePar") <- list(lab.col=as.vector(batch[attr(x, "label")]))
+      attr(x, "label") <- as.vector(labels[attr(x, "label")])
+    }
+    x
+  }, batch, outcome)
+
+# Plot the dendogram
+plot(sampleDendrogram, main="Hierarchical clustering of samples", cex=0.7)
+
+
+# Add legend for cell lines
+legend("topright", 
+       legend = names(cell_line_colors), 
+       fill = cell_line_colors, 
+       title = "Cell line", cex=0.8)
+
+```
+
+From the dendrogram, we observe a clear clustering of samples according to their respective cell lines, indicating that cell type is the primary source of variability in the dataset. Additionally, biological replicates cluster closely together within each cell line group.
+
+```{r mdsPlot, fig.height=5, fig.width=8, dpi=100, echo=FALSE, fig.cap="Multidimensional scaling plot of the samples. Labels correspond to the description and colors indicate the cell line."}
+outcome <- se.filt$description
+names(outcome) <- colnames(se.filt)
+plotMDS(dge.filt, labels=outcome, col=batch)
+legend("bottomleft", levels(se.filt$cell_line),
+       fill=cell_line_colors, inset=0.05)
+```
+
+To confirm the previous results we also perform a Multidimensional scaling plot. Similar to the dendrogram we observe a notable separation between the three cell lines,  with dimension 1 explaining 52% of the variance and dimension 2 explaining 40%. These 2 dimensions explain 92% of the variance, meaning that the plot is able to capture the most important differences between the samples. From this we can conclude that the sample comparison can only be done within the same cell line.
+
+
+# Differential Expression Analysis
+
+From this point on, we have decided to focus our comparisons between treatments and siControl, excluding the Untreated samples. This decision has been made because untreated cells haven't gone through the transfection procedure, which is know to cause some stress and gene expression changes on the cells. By comparing treatments exclusively with siControl, we maintain technical consistency across all experimental groups, ensuring that observed differential gene expression are due to specific siRNA effects rather than transfection-related artifacts.
+
+```{r}
+# Mask excluding untreated
+rm_untreated_mask <- se.filt$treatment != "Untreated"
+# Filter out the untreated samples
+se.filt.reduced <- se.filt[, rm_untreated_mask]
+dge.filt.reduced <- dge.filt[, rm_untreated_mask]
+
+# Drop the unused factors of the important variables
+se.filt.reduced$treatment <- droplevels(se.filt.reduced$treatment)
+se.filt.reduced$cell_line <- droplevels(se.filt.reduced$cell_line)
+se.filt.reduced$cellxtreatment <- droplevels(se.filt.reduced$cellxtreatment)
+
+# Visualized the reduced table
+table(se.filt.reduced$cell_line, se.filt.reduced$treatment)
+dim(se.filt.reduced)
+```
+
+Due to this filtering the total number of samples has been reduced from 24 to 18.
+
+Then, we create a design matrix using non-reference model, where each column is a cell x treatment combination. This step models each condition group independently, crucial for making pairwise comparisons. The matrix has a total of 18 samples and 9 cellxtreatment conditions.
+
+```{r}
+library(limma)
+# Create the Design Matrix
+mod <- model.matrix(~ 0 + se.filt.reduced$cellxtreatment, colData(se.filt.reduced))
+colnames(mod) <- levels(se.filt.reduced$cellxtreatment)
+dim(mod)
+```
+
+Additionally, we create a null model matrix that accounts for the cell line effects, but not the treatment differences.
+
+```{r}
+mod0 <- model.matrix(~ 0 + se.filt.reduced$cell_line, colData(se.filt.reduced))
+colnames(mod0) <- levels(se.filt.reduced$cell_line)
+```
+
+We continue with a surrogate variable analysis, where we obtain a total of 2 surrogate variables. We account for the 2 SV in the design matrix.
+
+```{r, message = FALSE}
+library(sva)
+# Estimate number of sv
+n.sv <- num.sv(assays(se.filt.reduced)$logCPM, mod)
+# Calculate the surrogate variables
+sv <- sva(assays(se.filt.reduced)$logCPM, mod=mod, mod0=mod0)
+ncol(sv$sv)
+
+# Create design matrix with the surrogate variables
+mod.sv <- cbind(mod, sv$sv)
+colnames(mod.sv) <- c(colnames(mod), paste0("SV", 1:n.sv))
+```
+
+Calculating intra-group correlation is not necessary in our case as we don't have other factors that could introduce additional correlations, and we have a balanced design with no confounding. 
+
+The following step is to fit a linear model for each gene, using the logCPM gene expression values. As there are two different ways to incorporate the mean variance relationship in our analysis (limma-trend and limma-voom) for the next steps we proceed with both approaches in parallel.
+
+```{r voomPlot, fig.height=5, fig.width=6, fig.cap="Voom mean-variance trend plot showing the relationship between log2(count size + 0.5) and square-root standard deviation. The red line represents the fitted trend used for precision weights calculation."}
+v <- voom(dge.filt.reduced, mod.sv, plot=TRUE)
+
+# Fit the Model to logCPM values
+fit.trend <- lmFit(assays(se.filt.reduced)$logCPM, mod.sv)
+fit.voom <- lmFit(v, mod.sv)
+```
+
+Afterwards, we define the contrasts of interest. This contrasts are per cell line with the comparison of the 2 treatments vs control. Followed by estimating the coefficients of the selected contrasts for each of the treatments.
+
+As the cell line is a dominant source of variability and each cell line has a different level of HPRT1 expression, we cannot compare the treatment across cell lines.
+
+```{r}
+# Specify Contrasts
+# Create separate contrast matrices for each cell line
+cont.matrix.MCF10A <- makeContrasts(
+  S1_vs_control = M10_S1 - M10_c1,
+  S2_vs_control = M10_S2 - M10_c1,
+  levels = mod.sv
+)
+
+cont.matrix.MCF7 <- makeContrasts(
+  S1_vs_control = M7_S1 - M7_c1,
+  S2_vs_control = M7_S2 - M7_c1,
+  levels = mod.sv
+)
+
+cont.matrix.MDA <- makeContrasts(
+  S1_vs_control = MDA_S1 - MDA_c1,
+  S2_vs_control = MDA_S2 - MDA_c1,
+  levels = mod.sv
+)
+
+# Apply contrasts for limma-trend approach
+fit.trend.MCF10A <- contrasts.fit(fit.trend, cont.matrix.MCF10A)
+fit.trend.MCF7 <- contrasts.fit(fit.trend, cont.matrix.MCF7)
+fit.trend.MDA <- contrasts.fit(fit.trend, cont.matrix.MDA)
+
+# Apply contrasts for limma-voom approach
+fit.voom.MCF10A <- contrasts.fit(fit.voom, cont.matrix.MCF10A)
+fit.voom.MCF7 <- contrasts.fit(fit.voom, cont.matrix.MCF7)
+fit.voom.MDA <- contrasts.fit(fit.voom, cont.matrix.MDA)
+
+```
+
+Then we calculate the t-statistics using the eBayes() function from the limma-trend package and obtain the raw p-values. With trend = TRUE, we adjust for the mean-variance relationship in the limma-trend approach and we skip this line in the limma-voom approach. Next, we adjust for multiple testing using the False Discovery Rate method.
+
+```{r}
+# Calculate statistics for limma-trend approach
+fit.trend.MCF10A <- eBayes(fit.trend.MCF10A, trend = TRUE)
+fit.trend.MCF7 <- eBayes(fit.trend.MCF7, trend = TRUE)
+fit.trend.MDA <- eBayes(fit.trend.MDA, trend = TRUE)
+
+# Calculate statistics for limma-voom approach
+fit.voom.MCF10A <- eBayes(fit.voom.MCF10A)
+fit.voom.MCF7 <- eBayes(fit.voom.MCF7)
+fit.voom.MDA <- eBayes(fit.voom.MDA)
+
+# Decision tests for limma-trend approach
+res.trend.MCF10A <- decideTests(fit.trend.MCF10A, p.value = 0.05, adjust.method = "fdr")
+res.trend.MCF7 <- decideTests(fit.trend.MCF7, p.value = 0.05, adjust.method = "fdr")
+res.trend.MDA <- decideTests(fit.trend.MDA, p.value = 0.05, adjust.method = "fdr")
+
+# Decision tests for limma-voom approach
+res.voom.MCF10A <- decideTests(fit.voom.MCF10A, p.value = 0.05, adjust.method = "fdr")
+res.voom.MCF7 <- decideTests(fit.voom.MCF7, p.value = 0.05, adjust.method = "fdr")
+res.voom.MDA <- decideTests(fit.voom.MDA, p.value = 0.05, adjust.method = "fdr")
+
+```
+
+These are the obtained summaries from the three contrast groups separated by cell line and with the two different mean-variance adjustment approaches.
+
+```{r, echo=FALSE}
+# Summaries for limma-trend approach
+cat("\nlimma-trend approach:\n")
+cat("\nMCF10A:\n")
+summary(res.trend.MCF10A)
+cat("\nMCF7:\n")
+summary(res.trend.MCF7)
+cat("\nMDA:\n")
+summary(res.trend.MDA)
+
+
+# Summaries for limma-voom approach
+cat("\nlimma-voom approach:\n")
+cat("\nMCF10A:\n")
+summary(res.voom.MCF10A)
+cat("\nMCF7:\n")
+summary(res.voom.MCF7)
+cat("\nMDA:\n")
+summary(res.voom.MDA)
+
+```
+
+With these summaries and by analyzing the results of both approaches, we have decided that the limma-trend approach is better, as the number of differentially expressed genes it finds is similar to the numbers found in the article, with the exception of the cell line MCF10A which gets bigger values in our analysis, independently of the methodology used.
+
+Looking at the limma-trend approach results summary, we can observe a tendency towards a higher number of DE genes in treatment 1 compared to treatment 2. In general the number of up-regulated and down-regulated genes tend to be similar without a specific tendency towards one side or the other.
+
+Then we assign the results of the limma-trend variables to more general variables names. This is done as a way to facilitate the visualization of both limma-trend or limma-voom results in case it is needed.
+
+```{r}
+res.MCF10A <- res.trend.MCF10A
+res.MCF7 <- res.trend.MCF7
+res.MDA <- res.trend.MDA
+
+fit.MCF10A <- fit.trend.MCF10A
+fit.MCF7 <- fit.trend.MCF7
+fit.MDA <-fit.trend.MDA
+```
+
+We can now visualize the obtained results. To visualize the how the differentially expressed genes intersect in treatment 1 and 2, we can do it through a Venn Diagram or Upset plot.
+<br>
+
+```{r vennDiagrams, echo=FALSE, message=FALSE, warning=FALSE, fig.cap="Venn diagrams showing overlap of differentially expressed genes between treatment 1 and treatment 2 for each cell line. Red circles represent treatment 1 vs control, blue circles represent treatment 2 vs control."}
+library(UpSetR)
+library(VennDiagram)
+
+par(mfrow = c(1, 3), mar = c(5, 4, 4, 2)) 
+vennDiagram(res.MCF10A, circle.col = c("red","blue"), cex = 1.1, main = "MCF-10A")
+vennDiagram(res.MCF7, circle.col = c("red","blue"), cex = 1.1, main = "MCF-7")
+vennDiagram(res.MDA, circle.col = c("red","blue"), cex = 1.1, main = "MDA-MB-231")
+```
+
+Both visualizations explain the same results, but we are going to focus in the Upset plots as they also show the total set size of each comparison.
+
+General observations that can be made for all contrasts are that treatment 1 causes a higher number of DE genes in all cases compared to treatment 2.
+<br>
+<br>
+
+```{r upsetMCF10A, echo=FALSE, fig.cap="UpSet plot showing intersection of differentially expressed genes in MCF-10A cell line between treatment 1 and treatment 2 compared to control. Bar heights indicate set sizes and intersection sizes."}
+cat("\n")
+res.MCF10A.df <- as.data.frame(res.MCF10A)
+res.MCF10A.df[res.MCF10A.df == -1] <- 1
+upset(res.MCF10A.df, order.by = "freq", text.scale = 1.5)
+grid.text("MCF-10A",x = 0.65, y=0.97, gp=gpar(fontsize=20))
+```
+
+In the non-tumorogenic cell line MCF-10A there are a total of `r sum(res.MCF10A.df[,1])` DE genes between treatment 1 and control and `r sum(res.MCF10A.df[,2])` DE genes between treatment 2 and control. With the intersection having a total of 1341 DE genes. 
+
+These results differ from those reported in the article, which found a lower number of DE genes in this cell line, with values closer to the MCF-7 cell line than to the MDA-MB-231 cell line. We are currently unable to explain the reason for these discrepancies in this particular cell line, especially since the other two cell lines largely align with the article’s findings.
+
+```{r upsetMCF7, echo=FALSE, fig.cap="UpSet plot showing intersection of differentially expressed genes in MCF-7 cell line between treatment 1 and treatment 2 compared to control. Bar heights indicate set sizes and intersection sizes."}
+cat("\n")
+res.MCF7.df <- as.data.frame(res.MCF7)
+res.MCF7.df[res.MCF7.df == -1] <- 1
+upset(res.MCF7.df, order.by = "freq", text.scale = 1.5)
+grid.text("MCF-7",x = 0.65, y=0.97, gp=gpar(fontsize=20))
+```
+
+In the estrogen receptor positive cancer cell line MCF-7 there are a total of `r sum(res.MCF7.df[,1])` DE genes between treatment 1 and control and `r sum(res.MCF7.df[,2])` DE genes between treatment 2 and control. With the intersection having a total of 50 DE genes.
+
+Interestingly these results signify that the the treatments are not having a strong effect on gene expression in the MCF-7 cell line. This matches with the original article results.
+
+```{r upsetMDA, echo=FALSE, fig.cap="UpSet plot showing intersection of differentially expressed genes in MDA-MB-231 cell line between treatment 1 and treatment 2 compared to control. Bar heights indicate set sizes and intersection sizes."}
+cat("\n")
+res.MDA.df <- as.data.frame(res.MDA)
+res.MDA.df[res.MDA.df == -1] <- 1
+upset(res.MDA.df, order.by = "freq", text.scale = 1.5)
+grid.text("MDA-MB-231",x = 0.65, y=0.97, gp=gpar(fontsize=20))
+```
+
+In the triple negative cancer cell line MDA-MB-231 there are a total of `r sum(res.MDA.df[,1])` DE genes between treatment 1 and control and `r sum(res.MDA.df[,2])` DE genes between treatment 2 and control. With the intersection having a total of 2967 DE genes. 
+
+From this, we can conclude that both knock-down treatments of HPRT1 have a strong effect on gene expression in this cell line. This observation aligns with the article’s findings, which reported that MDA-MB-231 exhibits much higher expression of HPRT1 compared to the other two cell lines, so its suppression results in a more pronounced effect.
+
+
+We continue by adding gene metadata to our fit objects.
+
+```{r}
+# Add genes metadata to the fit objects
+genes_metadata <- data.frame(
+  chr = as.character(seqnames(rowRanges(se.filt.reduced))),
+  symbol = rowData(se.filt.reduced)$symbol,
+  gene_id = rowData(se.filt.reduced)$gene_id,
+  gene_biotype = rowData(se.filt.reduced)$gene_biotype,
+  description = rowData(se.filt.reduced)$description,
+  stringsAsFactors = FALSE
+)
+
+fit.MCF10A$genes <- genes_metadata
+fit.MCF7$genes <- genes_metadata   
+fit.MDA$genes <- genes_metadata
+
+```
+
+Then we obtain a table of the DE genes for each contrast. After extracting the tables, we apply a filter to keep only those genes with an adjusted p-value less than 0.1 or 0.05.
+
+```{r}
+# Get top tables for each contrast using the correct fit objects
+tt_M10_S1_vs_c1 <- topTable(fit.MCF10A, coef = "S1_vs_control", number=Inf)
+tt_M10_S2_vs_c1 <- topTable(fit.MCF10A, coef = "S2_vs_control", number=Inf)
+tt_M7_S1_vs_c1 <- topTable(fit.MCF7, coef = "S1_vs_control", number=Inf)
+tt_M7_S2_vs_c1 <- topTable(fit.MCF7, coef = "S2_vs_control", number=Inf)
+tt_MDA_S1_vs_c1 <- topTable(fit.MDA, coef = "S1_vs_control", number=Inf)
+tt_MDA_S2_vs_c1 <- topTable(fit.MDA, coef = "S2_vs_control", number=Inf)
+
+# DE genes at FDR < 0.05
+DEgenes_M10_S1 <- rownames(tt_M10_S1_vs_c1)[tt_M10_S1_vs_c1$adj.P.Val < 0.05]
+DEgenes_M10_S2 <- rownames(tt_M10_S2_vs_c1)[tt_M10_S2_vs_c1$adj.P.Val < 0.05]
+DEgenes_M7_S1 <- rownames(tt_M7_S1_vs_c1)[tt_M7_S1_vs_c1$adj.P.Val < 0.05]
+DEgenes_M7_S2 <- rownames(tt_M7_S2_vs_c1)[tt_M7_S2_vs_c1$adj.P.Val < 0.05]
+DEgenes_MDA_S1 <- rownames(tt_MDA_S1_vs_c1)[tt_MDA_S1_vs_c1$adj.P.Val < 0.05]
+DEgenes_MDA_S2 <- rownames(tt_MDA_S2_vs_c1)[tt_MDA_S2_vs_c1$adj.P.Val < 0.05]
+
+# DE genes at FDR < 0.1
+DEgenes_M10_S1_01 <- rownames(tt_M10_S1_vs_c1)[tt_M10_S1_vs_c1$adj.P.Val < 0.1]
+DEgenes_M10_S2_01 <- rownames(tt_M10_S2_vs_c1)[tt_M10_S2_vs_c1$adj.P.Val < 0.1]
+DEgenes_M7_S1_01 <- rownames(tt_M7_S1_vs_c1)[tt_M7_S1_vs_c1$adj.P.Val < 0.1]
+DEgenes_M7_S2_01 <- rownames(tt_M7_S2_vs_c1)[tt_M7_S2_vs_c1$adj.P.Val < 0.1]
+DEgenes_MDA_S1_01 <- rownames(tt_MDA_S1_vs_c1)[tt_MDA_S1_vs_c1$adj.P.Val < 0.1]
+DEgenes_MDA_S2_01 <- rownames(tt_MDA_S2_vs_c1)[tt_MDA_S2_vs_c1$adj.P.Val < 0.1]
+```
+
+
+```{r, echo = FALSE}
+# Create comparison table
+comparison_table <- data.frame(
+  Comparison = c("MCF10A S1 vs Control", "MCF10A S2 vs Control", 
+                 "MCF7 S1 vs Control", "MCF7 S2 vs Control",
+                 "MDAMB231 S1 vs Control", "MDAMB231 S2 vs Control"),
+  FDR_0.05 = c(length(DEgenes_M10_S1), length(DEgenes_M10_S2),
+               length(DEgenes_M7_S1), length(DEgenes_M7_S2),
+               length(DEgenes_MDA_S1), length(DEgenes_MDA_S2)),
+  FDR_0.1 = c(length(DEgenes_M10_S1_01), length(DEgenes_M10_S2_01),
+              length(DEgenes_M7_S1_01), length(DEgenes_M7_S2_01),
+              length(DEgenes_MDA_S1_01), length(DEgenes_MDA_S2_01))
+)
+kable(comparison_table, 
+      col.names = c("Comparison", "DE genes (FDR < 0.05)", "DE genes (FDR < 0.1)"),
+      caption = "Values of differentially expressed genes across all comparisons at different FDR thresholds") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                position = "left",
+                full_width = FALSE)
+```
+In this table we can observe the number of DE genes with an FDR cut-off of 0.05 and 0.1. In our case we have chosen to continue with the FDR cut-off of 0.05 to reduce the number of false positives.
+
+From the top table data we obtain the p-value distributions of each contrast: 
+
+```{r pvalueHistogramsMCF10A, echo=FALSE, fig.height=5, fig.width=10, fig.cap="P-value distribution histograms for MCF-10A differential expression contrasts."}
+# P-value histograms
+par(mfrow=c(1,2), mar=c(5,5,4,4)) 
+hist(tt_M10_S1_vs_c1$P.Value, xlab="P-values", main="MCF-10A S1", las=0.8)
+hist(tt_M10_S2_vs_c1$P.Value, xlab="P-values", main="MCF-10A S2", las=0.8)
+```
+
+```{r pvalueHistogramsMCF7, echo=FALSE, fig.height=5, fig.width=10, fig.cap="P-value distribution histograms for MCF-7 differential expression contrasts."}
+# P-value histograms
+par(mfrow=c(1,2), mar=c(5,5,4,4)) 
+hist(tt_M7_S1_vs_c1$P.Value, xlab="P-values", main="MCF-7 S1", las=0.8)
+hist(tt_M7_S2_vs_c1$P.Value, xlab="P-values", main="MCF-7 S2", las=0.8)
+```
+
+```{r pvalueHistogramsMDAMB231, echo=FALSE, fig.height=5, fig.width=10, fig.cap="P-value distribution histograms for MDA-MB-231 differential expression contrasts."}
+# P-value histograms
+par(mfrow=c(1,2), mar=c(5,5,4,4)) 
+hist(tt_MDA_S1_vs_c1$P.Value, xlab="P-values", main="MDA-MB-231 S1", las=0.8)
+hist(tt_MDA_S2_vs_c1$P.Value, xlab="P-values", main="MDA-MB-231 S2", las=0.8)
+
+```
+
+All histograms look reasonably shaped, with a peak in the 0-0.1 range and a uniform distribution in the rest of the histogram. This suggests that most of our findings are likely to be true positives. It represents a significant improvement compared to the initial p-value distributions, which did not account for surrogate variables and the mean-variance relationship.
+
+
+We also obtain a volcano plot for each contrast, with the top 10 genes in each plot:
+
+```{r volcanoPlotsMCF10A, echo=FALSE, fig.height=5, fig.width=10, fig.cap="Volcano plots for MCF-10A samples showing log2 fold change vs -log10 p-value. Red points indicate significantly differentially expressed genes (FDR < 0.05). Blue labels show the top 10 most significant genes by p-value."}
+par(mfrow=c(1,2), mar=c(5,5,4,2)) 
+# MCF10A S1
+plot(tt_M10_S1_vs_c1$logFC, -log10(tt_M10_S1_vs_c1$P.Value), pch = 20, cex = 0.5, 
+     col = ifelse(tt_M10_S1_vs_c1$adj.P.Val < 0.05, "red", "black"),
+     xlab = "Log2 FoldChange", ylab = "-log10(P-value)", main = "MCF10A S1")
+# Add top 10 genes
+top10_M10_S1 <- head(tt_M10_S1_vs_c1, 10)
+text(top10_M10_S1$logFC, -log10(top10_M10_S1$P.Value), 
+     labels = top10_M10_S1$symbol, pos = 4, cex = 0.7, col = "blue")
+
+# MCF10A S2
+plot(tt_M10_S2_vs_c1$logFC, -log10(tt_M10_S2_vs_c1$P.Value), pch = 20, cex = 0.5, 
+     col = ifelse(tt_M10_S2_vs_c1$adj.P.Val < 0.05, "red", "black"),
+     xlab = "Log2 FoldChange", ylab = "-log10(P-value)", main = "MCF10A S2")
+# Add top 10 genes
+top10_M10_S2 <- head(tt_M10_S2_vs_c1, 10)
+text(top10_M10_S2$logFC, -log10(top10_M10_S2$P.Value), 
+     labels = top10_M10_S2$symbol, pos = 4, cex = 0.7, col = "blue")
+```
+
+```{r volcanoPlotsMCF7, echo=FALSE, fig.height=5, fig.width=10, fig.cap="Volcano plots for MCF-7 samples showing log2 fold change vs -log10 p-value. Red points indicate significantly differentially expressed genes (FDR < 0.05). Blue labels show the top 10 most significant genes by p-value."}
+par(mfrow=c(1,2), mar=c(5,5,4,2)) 
+# MCF7 S1
+plot(tt_M7_S1_vs_c1$logFC, -log10(tt_M7_S1_vs_c1$P.Value), pch = 20, cex = 0.5, 
+     col = ifelse(tt_M7_S1_vs_c1$adj.P.Val < 0.05, "red", "black"),
+     xlab = "Log2 FoldChange", ylab = "-log10(P-value)", main = "MCF7 S1")
+# Add top 10 genes
+top10_M7_S1 <- head(tt_M7_S1_vs_c1, 10)
+text(top10_M7_S1$logFC, -log10(top10_M7_S1$P.Value), 
+     labels = top10_M7_S1$symbol, pos = 4, cex = 0.7, col = "blue")
+
+# MCF7 S2
+plot(tt_M7_S2_vs_c1$logFC, -log10(tt_M7_S2_vs_c1$P.Value), pch = 20, cex = 0.5, 
+     col = ifelse(tt_M7_S2_vs_c1$adj.P.Val < 0.05, "red", "black"),
+     xlab = "Log2 FoldChange", ylab = "-log10(P-value)", main = "MCF7 S2")
+# Add top 10 genes
+top10_M7_S2 <- head(tt_M7_S2_vs_c1, 10)
+text(top10_M7_S2$logFC, -log10(top10_M7_S2$P.Value), 
+     labels = top10_M7_S2$symbol, pos = 4, cex = 0.7, col = "blue")
+```
+
+```{r volcanoPlotsMDAMB231, echo=FALSE, fig.height=5, fig.width=10, fig.cap="Volcano plots for MDA-MB-231 samples showing log2 fold change vs -log10 p-value. Red points indicate significantly differentially expressed genes (FDR < 0.05). Blue labels show the top 10 most significant genes by p-value."}
+par(mfrow=c(1,2), mar=c(5,5,4,2)) 
+# MDA S1
+plot(tt_MDA_S1_vs_c1$logFC, -log10(tt_MDA_S1_vs_c1$P.Value), pch = 20, cex = 0.5, 
+     col = ifelse(tt_MDA_S1_vs_c1$adj.P.Val < 0.05, "red", "black"),
+     xlab = "Log2 FoldChange", ylab = "-log10(P-value)", main = "MDA S1")
+# Add top 10 genes
+top10_MDA_S1 <- head(tt_MDA_S1_vs_c1, 10)
+text(top10_MDA_S1$logFC, -log10(top10_MDA_S1$P.Value), 
+     labels = top10_MDA_S1$symbol, pos = 4, cex = 0.7, col = "blue")
+
+# MDA S2
+plot(tt_MDA_S2_vs_c1$logFC, -log10(tt_MDA_S2_vs_c1$P.Value), pch = 20, cex = 0.5, 
+     col = ifelse(tt_MDA_S2_vs_c1$adj.P.Val < 0.05, "red", "black"),
+     xlab = "Log2 FoldChange", ylab = "-log10(P-value)", main = "MDA S2")
+# Add top 10 genes
+top10_MDA_S2 <- head(tt_MDA_S2_vs_c1, 10)
+text(top10_MDA_S2$logFC, -log10(top10_MDA_S2$P.Value), 
+     labels = top10_MDA_S2$symbol, pos = 4, cex = 0.7, col = "blue")
+```
+
+```{r, echo = FALSE}
+# Function to create DE genes table
+create_DE_table <- function(topTable_result, DEgenes_list, comparison_name, fdr_cutoff = 0.05) {
+  mask <- topTable_result$adj.P.Val < fdr_cutoff
+  
+  # Extract gene information
+  DEgenesEGs <- topTable_result[mask, "gene_id"]
+  DEgenesSyms <- topTable_result[mask, "symbol"]
+  DEgenesPvalue <- topTable_result[mask, "P.Value"]
+  DEgenesDesc <- topTable_result[mask, "description"]
+  DEgenesDesc <- sub(" \\[.+\\]", "", DEgenesDesc)
+  
+  # Order by numeric p-values
+  order_idx <- order(DEgenesPvalue)
+  DEgenesEGs <- DEgenesEGs[order_idx]
+  DEgenesSyms <- DEgenesSyms[order_idx]
+  DEgenesPvalue <- DEgenesPvalue[order_idx]
+  DEgenesDesc <- DEgenesDesc[order_idx]
+  
+  # Better handling of extremely small p-values
+  formatted_pvalues <- sapply(DEgenesPvalue, function(p) {
+    if (is.na(p)) {
+      return("NA")
+    } else if (p == 0 || p < .Machine$double.xmin) {
+      return("< 2.2e-16")
+    } else if (p < 1e-10) {
+      # For very small p-values, use scientific notation with more precision
+      return(sprintf("%.1e", p))
+    } else if (p < 0.001) {
+      return(sprintf("%.2e", p))
+    } else {
+      return(sprintf("%.4f", p))
+    }
+  })
+  
+  # Create data frame
+  DEgenesTab <- data.frame(
+    EntrezID = DEgenesEGs,
+    Symbol = DEgenesSyms,
+    Description = DEgenesDesc,
+    "P value" = formatted_pvalues,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  
+  rownames(DEgenesTab) <- 1:nrow(DEgenesTab)
+  comparison_display <- gsub("_", " ", comparison_name)
+  
+  # Write CSV file
+  fnameCSV <- paste0("DEgenes_", comparison_name, ".csv")
+  fpathCSV <- file.path(path2pkg, "doc", fnameCSV)
+  write.csv(DEgenesTab, fpathCSV, row.names = FALSE)
+  fpathCSV <- file.path(path2pkg, "inst", "doc", fnameCSV)
+  write.csv(DEgenesTab, fpathCSV, row.names = FALSE)
+  
+  # Generate HTML table
+  ktab <- kable(DEgenesTab, "html", escape = FALSE, row.names = TRUE,
+                caption = sprintf("Differentially expressed genes. Differentially expressed genes in %s with FDR &lt; %s%% (CSV <a href=\"%s\" download>file</a>).", 
+                                  comparison_display, fdr_cutoff*100, fnameCSV))
+  ktab <- kable_styling(ktab, bootstrap_options = c("stripped", "hover", "responsive"), fixed_thead = TRUE)
+  
+  fnameHTML <- paste0("DEgenes_", comparison_name, ".html")
+  fpathHTML <- file.path(path2pkg, "doc", fnameHTML)
+  save_kable(ktab, file = fpathHTML, self_contained = TRUE)
+  fpathHTML <- file.path(path2pkg, "inst", "doc", fnameHTML)
+  save_kable(ktab, file = fpathHTML, self_contained = TRUE)
+  
+  # Display top 10 DE genes
+  if(nrow(DEgenesTab) > 0) {
+    ktab <- kable(DEgenesTab[1:min(10, nrow(DEgenesTab)), ], "html", escape = FALSE, row.names = TRUE,
+                  caption = sprintf("Top-10 differentially expressed genes with lowest p-value in %s with FDR &lt; %s%%. To see the full list of DE genes, follow this <a href=\"%s\" target=\"_blank\">link</a> or download this CSV <a href=\"%s\" download>file</a>.", 
+                                    comparison_display, fdr_cutoff*100, fnameHTML, fnameCSV))
+    styled_table <- kable_styling(ktab, bootstrap_options = c("striped", "hover", "responsive", "condensed"), 
+                                  position = "left", full_width = FALSE)
+    return(styled_table)
+  } else {
+    cat("No genes were found to be significantly affected at FDR <", fdr_cutoff*100, "% in", comparison_name, "cells.")
+  }
+}
+
+
+# 6 comparisons:
+``` 
+
+```{r, echo=FALSE}
+# MCF10A comparisons
+cat("MCF-10A S1 vs Control\n")
+Top10_tab_M10_S1 <- create_DE_table(tt_M10_S1_vs_c1, DEgenes_M10_S1, "MCF10A_S1_vs_Control")
+Top10_tab_M10_S1
+```
+
+```{r, echo=FALSE}
+cat("\nMCF-10A S2 vs Control\n")
+Top10_tab_M10_S2 <- create_DE_table(tt_M10_S2_vs_c1, DEgenes_M10_S2, "MCF10A_S2_vs_Control")
+Top10_tab_M10_S2
+```
+
+```{r, echo=FALSE}
+# MCF7 comparisons
+cat("\nMCF-7 S1 vs Control\n")
+Top10_tab_M7_S1 <- create_DE_table(tt_M7_S1_vs_c1, DEgenes_M7_S1, "MCF7_S1_vs_Control")
+Top10_tab_M7_S1
+```
+
+```{r, echo=FALSE}
+cat("\nMCF-7 S2 vs Control\n")
+Top10_tab_M7_S2 <- create_DE_table(tt_M7_S2_vs_c1, DEgenes_M7_S2, "MCF7_S2_vs_Control")
+Top10_tab_M7_S2
+```
+
+```{r, echo=FALSE}
+# MDA comparisons
+cat("\nMDA-MB-231 S1 vs Control\n")
+Top10_tab_MDA_S1 <- create_DE_table(tt_MDA_S1_vs_c1, DEgenes_MDA_S1, "MDAMB231_S1_vs_Control")
+Top10_tab_MDA_S1
+```
+
+```{r, echo=FALSE}
+cat("\nMDA-MB-231 S2 vs Control\n")
+Top10_tab_MDA_S2 <- create_DE_table(tt_MDA_S2_vs_c1, DEgenes_MDA_S2, "MDAMB231_S2_vs_Control")
+Top10_tab_MDA_S2
+```
+
+Additionally, we can check the chromosomal distribution for the DE genes found in each contrast. Interestingly, in all cases, the highest number of DE genes are located in chromosome 1.
+
+```{r, echo = FALSE}
+# Chromosomal distribution analysis for each comparison
+cat("\nMCF10A S1 vs Control - Chromosomal distribution:\n")
+chr_dist_M10_S1 <- sort(table(tt_M10_S1_vs_c1[DEgenes_M10_S1, "chr"]), decreasing=TRUE)
+print(chr_dist_M10_S1)
+
+cat("\nMCF10A S2 vs Control - Chromosomal distribution:\n")
+chr_dist_M10_S2 <- sort(table(tt_M10_S2_vs_c1[DEgenes_M10_S2, "chr"]), decreasing=TRUE)
+print(chr_dist_M10_S2)
+
+cat("\nMCF7 S1 vs Control - Chromosomal distribution:\n")
+chr_dist_M7_S1 <- sort(table(tt_M7_S1_vs_c1[DEgenes_M7_S1, "chr"]), decreasing=TRUE)
+print(chr_dist_M7_S1)
+
+cat("\nMCF7 S2 vs Control - Chromosomal distribution:\n")
+chr_dist_M7_S2 <- sort(table(tt_M7_S2_vs_c1[DEgenes_M7_S2, "chr"]), decreasing=TRUE)
+print(chr_dist_M7_S2)
+
+cat("\nMDA S1 vs Control - Chromosomal distribution:\n")
+chr_dist_MDA_S1 <- sort(table(tt_MDA_S1_vs_c1[DEgenes_MDA_S1, "chr"]), decreasing=TRUE)
+print(chr_dist_MDA_S1)
+
+cat("\nMDA S2 vs Control - Chromosomal distribution:\n")
+chr_dist_MDA_S2 <- sort(table(tt_MDA_S2_vs_c1[DEgenes_MDA_S2, "chr"]), decreasing=TRUE)
+print(chr_dist_MDA_S2)
+
+```
+
+# Functional enrichment analysis
+This section presents the functional enrichment analysis. After evaluating three alternative approaches (hypergeometric, GSEA and GSVA), we selected Gene Set Enrichment Analysis (GSEA) as the most appropriate method for our dataset.
+
+While the hypergeometric method identified a greater number of enriched pathways overall, the pathways detected by GSEA showed higher biological significance. Unlike classical methods, which rely on arbitrary thresholds for defining differentially expressed genes, GSEA used the entire ranked list of genes. This enables the detection of subtle but coordinated changes in gene sets that other methods may miss.
+
+Within the GSEA workflow, we chose to use the Gene permutation strategy. As we saw in class, this approach allows for an effectively unlimited number of permutations, which allows us to do a stronger statistical discrimination, and it is especially useful in settings with limited replicates per condition, like our dataset.
+Therefore, all functional analyses in this section were performed using GSEA with gene permutation.
+
+```{r setup_functional, warning=FALSE, message=FALSE}
+# Load required packages
+library(org.Hs.eg.db)           # For gene annotation
+library(AnnotationDbi)
+library(kableExtra)             # For table formatting
+library(GSEABase)               # For gene set manipulation
+library(fgsea)                  # For GSEA
+library(GSVA)                   # For GSVA
+library(GSVAdata)               # For GSVA data
+library(knitr)                  # For reporting
+library(ggplot2)                # For plotting
+```
+
+## Data Preparation for Functional Analysis
+
+We start by building the gene universe with a total of `r nrow(se.filt.reduced)` genes. As the gene names are already in Entrez id formatting no conversion is needed.
+
+```{r prepare_functional_data}
+# Gene universe preparation
+geneUniverse <- rownames(se.filt.reduced)
+```
+
+
+```{r, echo = FALSE}
+cat("Number of DE genes for each contrast at FDR < 0.05:\n")
+cat("MCF-10A S1:", length(DEgenes_M10_S1),"\n")
+cat("MCF-10A S2:", length(DEgenes_M10_S2),"\n")
+cat("MCF-7 S1:", length(DEgenes_M7_S1),"\n")
+cat("MCF-7 S2:", length(DEgenes_M7_S2), "\n")
+cat("MDA-MB-231 S1:", length(DEgenes_MDA_S1),"\n")
+cat("MDA-MB-231 S2:", length(DEgenes_MDA_S2), "\n")
+```
+
+## Method chosen: Gene Set Enrichment Analysis (GSEA)
+We start by preparing the gene set data for later Gene Set Enrichment Analysis (GSEA). We begin by loading the pathway data and selecting only those pathways that are of our interest. We remove duplicate entries, and convert the final list into a compatible format for the `fgsea` function.
+```{r prepare_gsea}
+# Load pathway data
+data(c2BroadSets)
+
+# Select indices of pathways of interest
+selected_indices <- c(
+  grep("^KEGG", names(c2BroadSets)),
+  grep("^REACTOME", names(c2BroadSets)),
+  grep("^BIOCARTA", names(c2BroadSets)),
+  grep("^HALLMARK", names(c2BroadSets)),
+  grep("^PID", names(c2BroadSets)),
+  grep("CELL_CYCLE", names(c2BroadSets), ignore.case = TRUE),
+  grep("PROLIFERATION", names(c2BroadSets), ignore.case = TRUE)
+)
+
+# Remove duplicate indices
+selected_indices <- unique(selected_indices)
+
+# Obtain the unique gene sets
+c2BroadSets <- c2BroadSets[selected_indices]
+
+# Convert to list format for fgsea
+gsets <- geneIds(c2BroadSets)
+cat("There are", length(gsets), "gene sets for GSEA\n")
+```
+Here, we define the `perform_GSEA` function that will do the GSEA analysis. For each contrast, we rank genes by their t-statistics from the differential expression analysis and evaluate if the gene sets are significantly enriched at the top or the bottom of the list. Significant pathways are filtered, summarized in tables, and visualized using enrichment plots. Finally, we run `perform_GSEA` for all comparisons. 
+```{r gsea_analysis}
+# GSEA function
+perform_GSEA <- function(top_table, comparison_name) {
+  cat("### GSEA Analysis:", comparison_name, "\n")
+  
+  stats <- top_table$t
+  names(stats) <- rownames(top_table)
+  stats <- sort(stats, decreasing = TRUE)
+  
+  set.seed(123)
+  gseapermgsets <- fgsea(pathways = gsets,
+                         stats = stats,
+                         minSize = 5,
+                         maxSize = 300)
+
+  sigRes <- gseapermgsets[gseapermgsets$padj < 0.01]
+  sigRes <- sigRes[order(sigRes$pval)]
+  cat("Found", nrow(sigRes), "significant pathways (FDR < 0.01)\n")
+
+  display_res <- display_GSEA_results(sigRes, gsets, stats, comparison_name, all_results = gseapermgsets)
+
+  return(list(all_results = gseapermgsets, display = display_res))
+}
+
+# Function to display GSEA results with tables and plots
+display_GSEA_results <- function(sigRes, gsets, stats, comparison_name, all_results = NULL) {
+  result_list <- list()
+  
+  # P-value histogram
+  if (!is.null(all_results)) {
+    result_list$pvalues <- function () {
+      hist(all_results$pval, xlab = "P-value", main = paste("Permuting gene sets -", comparison_name), las = 1)
+    }
+  }
+  
+  if (nrow(sigRes) > 0) {
+    up_pathways <- sigRes[sigRes$NES > 0, ]
+    down_pathways <- sigRes[sigRes$NES < 0, ]
+    
+    cat("Upregulated pathways:", nrow(up_pathways), "\n")
+    cat("Downregulated pathways:", nrow(down_pathways), "\n")
+    
+    if (nrow(sigRes) > 0) {
+      sigRes_display <- sigRes
+      sigRes_display$pval <- sapply(sigRes_display$pval, function(p) {
+        if (is.na(p)) {
+          return("NA")
+        } else if (p == 0 || p < .Machine$double.xmin) {
+          return("< 2.2e-16")
+        } else if (p < 1e-3) {
+          return(sprintf("%.1e", p))
+        } else {
+          return(sprintf("%.4f", p))
+        }
+      })
+      
+      sigRes_display$padj <- sapply(sigRes$padj, function(p) {
+        if (is.na(p)) {
+          return("NA")
+        } else if (p == 0 || p < .Machine$double.xmin) {
+          return("< 2.2e-16")
+        } else if (p < 1e-3) {
+          return(sprintf("%.1e", p))
+        } else {
+          return(sprintf("%.4f", p))
+        }
+      })
+      
+      display_cols <- c("pathway", "pval", "padj", "log2err", "ES", "NES", "size")
+      top_pathways <- head(sigRes_display[, ..display_cols], 6)
+      
+      result_list$kable_top <- kable(top_pathways, 
+                                    caption = paste("Top significant pathways", comparison_name), 
+                                    digits = 4,
+                                    col.names = c("Pathway", "P-value", "FDR", "log2err", "ES", "NES", "Size")) %>% 
+        kable_styling(bootstrap_options = c("striped", "hover"))
+    }
+    
+    # Enrichment plots
+    if (nrow(up_pathways) > 0) {
+      top_up <- up_pathways$pathway[1]
+      result_list$plot_up <- plotEnrichment(gsets[[top_up]], stats) + 
+        ggtitle(paste("Top upregulated:", top_up, "-", comparison_name)) + 
+        theme_minimal()
+    }
+    
+    if (nrow(down_pathways) > 0) {
+      top_down <- down_pathways$pathway[1]
+      result_list$plot_down <- plotEnrichment(gsets[[top_down]], stats) + 
+        ggtitle(paste("Top downregulated:", top_down, "-", comparison_name)) + 
+        theme_minimal()
+    } else {
+      cat("No significantly downregulated pathways for", comparison_name, "\n")
+      result_list$plot_down <- NULL
+    }
+  }
+  
+  return(result_list)
+}
+
+
+```
+We run the Gene Set Enrichment Analysis for all comparisons.
+```{r}
+# Run GSEA for all comparisons
+gsea_results <- list()
+
+# MCF10A comparisons
+gsea_results[["MCF10A_S1"]] <- perform_GSEA(tt_M10_S1_vs_c1, "MCF10A S1 vs Control")
+gsea_results[["MCF10A_S2"]] <- perform_GSEA(tt_M10_S2_vs_c1, "MCF10A S2 vs Control")
+
+# MCF7 comparisons
+gsea_results[["MCF7_S1"]] <- perform_GSEA(tt_M7_S1_vs_c1, "MCF7 S1 vs Control")
+gsea_results[["MCF7_S2"]] <- perform_GSEA(tt_M7_S2_vs_c1, "MCF7 S2 vs Control")
+
+# MDA comparisons
+gsea_results[["MDA_S1"]] <- perform_GSEA(tt_MDA_S1_vs_c1, "MDA S1 vs Control")
+gsea_results[["MDA_S2"]] <- perform_GSEA(tt_MDA_S2_vs_c1, "MDA S2 vs Control")
+```
+In this section, we show the results of our Gene Set Enrichment Analysis.
+```{r}
+show_gsea_plot <- function(plot_obj, label = "GSEA Plot") {
+  if (!is.null(plot_obj)) {
+    print(plot_obj)
+  } else {
+    cat(paste(label, "is not available (e.g., no significant pathways).\n"))
+  }
+}
+```
+
+### MCF10 Results
+#### Treatment 1
+```{r mcf10as1pval, echo=FALSE, fig.height=5, fig.width=8, fig.cap="Distribution of p-values from GSEA permutation test for MCF10A S1 vs Control showing the null distribution of pathway enrichment scores."}
+gsea_results[["MCF10A_S1"]]$display$pvalues()
+```
+
+```{r mcf10as1table, echo=FALSE, results='asis'}
+cat('<div style="overflow-x: auto;">')
+gsea_results[["MCF10A_S1"]]$display$kable_top
+cat('</div>')
+```
+
+```{r mcf10as1up, echo=FALSE, fig.cap="GSEA enrichment plot for the most significantly upregulated pathway in MCF10A S1 vs Control."}
+gsea_results[["MCF10A_S1"]]$display$plot_up
+```
+
+```{r mcf10as1down, echo=FALSE, fig.cap="GSEA enrichment plot for the most significantly downregulated pathway in MCF10A S1 vs Control."}
+show_gsea_plot(gsea_results[["MCF10A_S1"]]$display$plot_down, "MCF10A S1-Downregulated")
+```
+
+#### Treatment 2
+
+```{r mcf10as2pval, echo=FALSE, fig.height=5, fig.width=8, fig.cap="Distribution of p-values from GSEA permutation test for MCF10A S2 vs Control showing the null distribution of pathway enrichment scores."}
+gsea_results[["MCF10A_S2"]]$display$pvalues()
+```
+
+```{r mcf10as2table, echo=FALSE, results='asis'}
+cat('<div style="overflow-x: auto;">')
+gsea_results[["MCF10A_S2"]]$display$kable_top
+cat('</div>')
+```
+
+```{r mcf10as2up, echo=FALSE, fig.cap="GSEA enrichment plot for the most significantly upregulated pathway in MCF10A S2 vs Control."}
+gsea_results[["MCF10A_S2"]]$display$plot_up
+```
+
+```{r mcf10as2down, echo=FALSE, fig.cap="GSEA enrichment plot for the most significantly downregulated pathway in MCF10A S2 vs Control."}
+show_gsea_plot(gsea_results[["MCF10A_S2"]]$display$plot_down, "MCF10A S2-Downregulated")
+```
+
+### MCF7 Results
+#### Treatment 1
+
+```{r mcf7as1pval, echo=FALSE, fig.height=5, fig.width=8, fig.cap="Distribution of p-values from GSEA permutation test for MCF7 S1 vs Control showing the null distribution of pathway enrichment scores."}
+gsea_results[["MCF7_S1"]]$display$pvalues()
+```
+
+```{r mcf7as1table, echo=FALSE, results='asis'}
+cat('<div style="overflow-x: auto;">')
+gsea_results[["MCF7_S1"]]$display$kable_top
+cat('</div>')
+```
+
+```{r mcf7as1up, echo=FALSE, fig.cap="GSEA enrichment plot for the most significantly upregulated pathway in MCF7 S1 vs Control."}
+gsea_results[["MCF7_S1"]]$display$plot_up
+```
+
+```{r}
+show_gsea_plot(gsea_results[["MCF7_S1"]]$display$plot_down, "MCF7 S1-Downregulated")
+```
+
+#### Treatment 2
+
+```{r mcf7as2pval, echo=FALSE, fig.height=5, fig.width=8, fig.cap="Distribution of p-values from GSEA permutation test for MCF7 S2 vs Control showing the null distribution of pathway enrichment scores."}
+gsea_results[["MCF7_S2"]]$display$pvalues()
+```
+
+```{r mcf7as2table, echo=FALSE, results='asis'}
+cat('<div style="overflow-x: auto;">')
+gsea_results[["MCF7_S2"]]$display$kable_top
+cat('</div>')
+```
+
+```{r mcf7as2up, echo=FALSE, fig.cap="GSEA enrichment plot for the most significantly upregulated pathway in MCF7 S2 vs Control."}
+gsea_results[["MCF7_S2"]]$display$plot_up
+```
+
+```{r}
+show_gsea_plot(gsea_results[["MCF7_S2"]]$display$plot_down, "MCF7 S2-Downregulated")
+```
+
+### MDA results
+#### Treatment 1
+
+```{r mdaas1pval, echo=FALSE, fig.height=5, fig.width=8, fig.cap="Distribution of p-values from GSEA permutation test for MDA S1 vs Control showing the null distribution of pathway enrichment scores."}
+gsea_results[["MDA_S1"]]$display$pvalues()
+```
+
+```{r mdaas1table, echo=FALSE, results='asis'}
+cat('<div style="overflow-x: auto;">')
+gsea_results[["MDA_S1"]]$display$kable_top
+cat('</div>')
+```
+
+```{r mdaas1up, echo=FALSE, fig.cap="GSEA enrichment plot for the most significantly upregulated pathway in MDA S1 vs Control."}
+gsea_results[["MDA_S1"]]$display$plot_up
+```
+
+```{r}
+show_gsea_plot(gsea_results[["MDA_S1"]]$display$plot_down, "MDA S1-Downregulated")
+```
+
+#### Treatment 2
+
+```{r mdaas2pval, echo=FALSE, fig.height=5, fig.width=8, fig.cap="Distribution of p-values from GSEA permutation test for MDA S2 vs Control showing the null distribution of pathway enrichment scores."}
+gsea_results[["MDA_S1"]]$display$pvalues()
+```
+
+```{r mdaas2table, echo=FALSE, results='asis'}
+cat('<div style="overflow-x: auto;">')
+gsea_results[["MDA_S2"]]$display$kable_top
+cat('</div>')
+```
+
+```{r mdaas2up, echo=FALSE, fig.cap="GSEA enrichment plot for the most significantly upregulated pathway in MDA S2 vs Control."}
+gsea_results[["MDA_S2"]]$display$plot_up
+```
+
+```{r}
+show_gsea_plot(gsea_results[["MDA_S2"]]$display$plot_down, "MDA S2-Downregulated")
+```
+
+### Summarization of the GSEA analyses
+Next, we provide a high-level overview of pathway activity across all experimental conditions. We summarize the results of the GSEA analyses in a single table. For each comparison, we count the number of significantly enriched pathways with a false discovery rate (FDR) below 0.01, separated into upregulated (NES > 0) and downregulated (NES < 0) categories.
+
+```{r}
+create_gsea_summary_table <- function(gsea_results) {
+  # Initialize data frame with proper structure
+  summary_data <- data.frame(
+    Comparison = character(),
+    Total_Significant = integer(),
+    Upregulated = integer(),
+    Downregulated = integer(),
+    Percent_Up = numeric(),
+    Percent_Down = numeric(),
+    stringsAsFactors = FALSE
+  )
+  
+  # Process each comparison
+  for (comparison_name in names(gsea_results)) {
+    gsea_data <- gsea_results[[comparison_name]]$all_results
+    
+    # Filter significant pathways (FDR < 0.01)
+    sigRes <- gsea_data[gsea_data$padj < 0.01, ]
+    
+    if (nrow(sigRes) > 0) {
+      # Count upregulated and downregulated pathways
+      n_up <- sum(sigRes$NES > 0)
+      n_down <- sum(sigRes$NES < 0)
+      n_total <- nrow(sigRes)
+      
+      # Calculate percentages
+      pct_up <- round((n_up / n_total) * 100, 1)
+      pct_down <- round((n_down / n_total) * 100, 1)
+    } else {
+      n_up <- 0
+      n_down <- 0
+      n_total <- 0
+      pct_up <- 0
+      pct_down <- 0
+    }
+    
+    # Clean comparison name for display
+    clean_name <- gsub("_", " ", comparison_name)
+    clean_name <- gsub("MCF10A", "MCF-10A", clean_name)
+    clean_name <- gsub("MCF7", "MCF-7", clean_name)
+    clean_name <- gsub("MDA", "MDA-MB-231", clean_name)
+    
+    # Add to summary data
+    summary_data <- rbind(summary_data, data.frame(
+      Comparison = clean_name,
+      Total_Significant = n_total,
+      Upregulated = n_up,
+      Downregulated = n_down,
+      Percent_Up = pct_up,
+      Percent_Down = pct_down,
+      stringsAsFactors = FALSE
+    ))
+  }
+  
+  return(summary_data)
+}
+
+# Create a summary table
+gsea_summary <- create_gsea_summary_table(gsea_results)
+
+# Display as a formatted kable table
+gsea_summary_table <- kable(gsea_summary, 
+                           format = "html",
+                           col.names = c("Comparison", "Total Significant", "Upregulated", 
+                                       "Downregulated", "% Up", "% Down"),
+                           caption = "Summary of GSEA Results Across All Comparisons (FDR < 0.01)",
+                           align = c("l", "c", "c", "c", "c", "c")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                position = "center",
+                full_width = FALSE) %>%
+  add_header_above(c(" " = 1, "Significant Pathways" = 2, "Direction of Enrichment" = 3)) %>%
+  column_spec(1, bold = TRUE) %>%
+  column_spec(2, color = "darkblue", bold = TRUE) %>%
+  column_spec(3, color = "darkgreen") %>%
+  column_spec(4, color = "darkred") %>%
+  row_spec(0, bold = TRUE, background = "#f8f9fa")
+
+# Display the table
+gsea_summary_table
+
+# Save the summary table as HTML
+save_kable(gsea_summary_table, 
+           file = file.path(path2pkg, "doc", "GSEA_summary_table.html"), 
+           self_contained = TRUE)
+
+```
+To facilitate the interpretation and reporting of GSEA results, we generate HTML summary tables for each experimental comparison. For gene sets with FDR-adjusted p-values below 0.01, the relevant statistics (e.g., p-value, enrichment score, normalized enrichment score) are extracted. These tables are saved as HTML files and organized by comparison.
+```{r}
+# Create HTML tables for GSEA results
+for(comparison_name in names(gsea_results)) {
+  gsea_data <- gsea_results[[comparison_name]]$all_results
+  
+  # Get full result and filter
+  sigRes <- gsea_data[gsea_data$padj < 0.01, ]
+  sigRes <- sigRes[order(sigRes$pval), ]
+  
+  if(nrow(sigRes) > 0) {
+    cat("Creating HTML table for:", comparison_name, "\n")
+    
+    # Prepare data for kable (remove leadingEdge for cleaner table)
+    display_cols <- c("pathway", "pval", "padj", "log2err", "ES", "NES", "size", "leadingEdge")
+    gsea_table <- sigRes[, ..display_cols]
+    
+    # Create kable
+    ktab <- kable(gsea_table, "html", 
+                  caption = paste("GSEA results -", comparison_name),
+                  digits = 4)
+    ktab <- kable_styling(ktab,
+                          bootstrap_options = c("striped", "hover", "responsive"),
+                          fixed_thead = TRUE)
+    
+    # Save kable HTML
+    filename_kable <- file.path(path2pkg, "doc", paste0("GSEA_kable_", gsub(" ", "_", comparison_name), ".html"))
+    save_kable(ktab, file = filename_kable, self_contained = TRUE)
+    cat("Kable HTML saved as:", filename_kable, "\n\n")
+  } else {
+    cat("No significant pathways found for:", comparison_name, "\n\n")
+  }
+}
+```
+
+
+
+# Discussion
+
+Our main objective in this analysis is to understand the role of HPRT1 in the regulation of crucial tumorigenic genes and pathways. To achieve this, two HPRT1 knockdown treatments were performed across three breast cell lines, and the resulting transcriptional responses were analyzed.
+
+The differential expression analysis (DEA) reveals a substantial variability in the number of differentially expressed genes across the cell lines, suggesting that the role of HPRT1 is highly dependent on the cell type it is being expressed in. This is evidenced by previous findings of the authors of this dataset, who reported that HPRT1 expression was significantly elevated in cancer tissues compared to normal tissues, especially in breast cancer, with the triple-negative breast cancer MDA-MB-231 showing the highest expression.
+
+In the DEA analysis, MDA-MB-231 triple-negative breast cancer cell line exhibits the highest number of transcriptional changes, with over 7000 differentially expressed genes in treatment 1 and over 4000 differentially expressed genes in treatment 2. This is consistent with the previous findings, as higher HPRT1 expression in this cell line could be due to a higher dependence on the HPRT enzyme to keep up with the demand for DNA and RNA synthesis in proliferating cancer cells. Thus, the disruption of this gene has a significant effect on HPRT1 dependent processes.
+
+In contrast, the MCF-7 estrogen receptor-positive breast cancer cell line shows minimal transcriptional changes in response to both HPRT1 knock downs, with only 355 and 96 differentially expressed genes for treatment 1 and 2. This likely reflects the lower expression of HPRT1 in MCF-7 cells compared to MDA-MB-231, making them less susceptible to HPRT1 suppression. Additionally, MCF-7 cells tend to have a lower growth rate and due to the biological and metabolic differences between both cancer cell lines, MCF-7 may rely on alternative metabolic pathways. This aligns with the conclusions obtained by the original authors.
+
+Surprisingly, the analysis of the MCF-10A non-tumorigenic breast cells shows an unexpected response compared to the original article authors. With 5600 differentially expressed genes affected by treatment 1 and almost 2500 affected by treatment 2, highly exceeding the 948 and 361 genes reported in the original study. This discrepancy might be due to differences in analytical pipelines or parameters used during the analysis. However, the magnitude of the difference suggests that additional factors may be involved.
+
+The higher number of gene differences in treatment 1 compared to treatment 2 across all cell lines suggests that the siRNA sequences might have different knockdown efficiencies and highlights the importance of including different siRNA sequences in this type of studies.
+ 	 	
+The results of the gene set enrichment analysis give us some insight on the differential expression patterns we can observe across cell lines.
+
+MCF-10A cells show a combination of upregulated and downregulated pathways. The upregulation appears to be an attempt by the cell to compensate for the knock down by entering into a hyperproliferation state, evidenced by the multiple cell cancer proliferation pathways. In contrast, the downregulation seems to be a stress response, as indicated with the multiple enriched pathways related to neurodegenerative diseases. Interestingly, treatment 2, which might have a lower efficiency, causes a completely balanced pathway enrichment in terms of regulation. However, the more effective treatment displays a trend towards downregulated pathways, meaning that the cell line might be less capable of adapting to these conditions.
+
+The two cancer cell lines (MCF-7 and MDA-MB-231) show only upregulated pathway enrichment. Suggesting that their main response to the HPRT1 knock down is the activation of compensatory pathways, rather than a stress response. This highlights the high adaptability and survival capability of cancer cell lines in response to unexpected changes.
+
+Specifically, both cell lines primarily upregulate translation and ribosomal biogenesis pathways. Since HPRT1 is needed for the recycling of purine nucleotides, which in turn are necessary for the synthesis of DNA or RNA, the lack of HPRT1 seems to be causing an increase in protein synthesis to compensate through alternative pathways of purine synthesis. Additionally, in MDA-MB-231 treatment S2, there is an upregulation in cell adhesion and extracellular matrix interaction pathways indicating a possible survival mechanism.
+
+Overall, our project confirms distinct cellular responses to the same treatments, due to the inherent biological differences between the non-tumorigenic and the breast cancer cell lines.
+
+
+# Conclusions
+
+HPRT1, which has always been known as a housekeeping gene, plays an important role in cancer biology and could potentially be used as a biomarker in breast cancer. This analysis demonstrates that HPRT1 knockdown produces cell-type specific transcriptional responses in breast cells. Revealing differences in HPRT1 dependency across breast cell types, with the more aggressive cancer subtype MDA-MB-231 being more vulnerable to HPRT1 inhibition. Together, these findings suggest that HPRT1 could serve as a promising diagnostic or therapeutic target in breast cancer.
+
+# Session information
+
+```{r}
+sessionInfo()
+```
+
+# References
+
