@@ -1,4 +1,4 @@
-# RNAseq_analysis
+# RNAseq analysis
 This repository contains a complete RNA-seq reanalysis investigating the role of HPRT1 in breast cancer (J. Sedano et al. (2020)). The analysis is based on publicly available RNA-seq data (GEO: GSE149768) and explores HPRT1 expression across different breast cancer cell lines and knockdown conditions.
 
 ## Project overview
@@ -17,4 +17,4 @@ Our analysis aims to:
 - **Maria Tarrat Castells** – maria.tarrat01@estudiant.upf.edu  
 
 ## References
-J. Sedano, Melina, Enrique I. Ramos, Ramesh Choudhari, Alana L. Harrison, Ramadevi Subramani, Rajkumar Lakshmanaswamy, Mina Zilaie, and Shrikanth S Gadad. 2020. “Hypoxanthine Phosphoribosyl Transferase 1 Is Upregulated, Predicts Clinical Outcome and Controls Gene Expression in Breast Cancer.” Cancers 12 (6): 1522.
+J. Sedano, Melina, Enrique I. Ramos, Ramesh Choudhari, Alana L. Harrison, Ramadevi Subramani, Rajkumar Lakshmanaswamy, Mina Zilaie, and Shrikanth S Gadad. 2020. "Hypoxanthine Phosphoribosyl Transferase 1 Is Upregulated, Predicts Clinical Outcome and Controls Gene Expression in Breast Cancer." Cancers 12 (6): 1522.
